@@ -77,9 +77,8 @@ L11:
 
 ## About
 
-- **Context:** Compilers course, Department of Computer Science & Engineering, University of Ioannina, spring 2023
+- **Context:** Compilers course, Department of Computer Science & Engineering, University of Ioannina
 - **Team:** Team project (2 students)
-- **Added in 2026:** example programs, regression tests, CI and documentation. The compiler code is unchanged from 2023.
 - **Status:** Complete as a course project. See [Limitations](#limitations-and-next-steps).
 
 The course asked for a complete compiler for CutePy, written in plain Python with no parser generators or other compiler tools. CutePy supports integers, `if`/`else`, `while`, nested functions, recursion and pass-by-value parameters. The compiler does everything in a single pass: a hand-written lexer and a recursive-descent parser check the program, and generate intermediate code, fill a symbol table and emit RISC-V assembly for each function as it is parsed.

@@ -1,0 +1,15 @@
+0 begin_block main_gcd _ _
+1 inp a _ _
+2 inp b _ _
+3 != b 0 5
+4 jump _ _ 12
+5 // a b T_1
+6 * T_1 b T_2
+7 - a T_2 T_3
+8 = T_3 _ r
+9 = b _ a
+10 = r _ b
+11 jump _ _ 3
+12 out a _ _
+13 halt _ _ _
+14 end_block main_gcd _ _

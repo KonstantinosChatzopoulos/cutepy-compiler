@@ -227,7 +227,7 @@ Next steps: fix the items above, write the output next to the input file, and ru
 ## Acknowledgments
 
 - The CutePy language and its specification were designed by the course instructor for the Compilers course. The specification isn't included in this repo; [docs/language.md](docs/language.md) is our own summary.
-- AI assistance: the README, documentation, examples and tests were prepared with AI assistance. The compiler is our original work.
+- AI assistance: the README, documentation, code comments, examples and tests were prepared with AI assistance. The compiler is our original work.
 
 ## License
 

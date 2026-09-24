@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.py[cod]
+venv/
+.venv/
+
+# IDEs
+.idea/
+.vscode/
+
+# Compiler output written to the working directory
+/intermediate code.int
+/final code.asm

@@ -219,6 +219,7 @@ Known limitations:
 - **Input and program start:** `inp` reads a number but doesn't store it in the variable. The main function has no stack setup, and `halt` puts the exit system-call number (10) in `a0` instead of `a7`.
 - **`if`/`else`:** the jump at the end of the `if` branch goes to the start of the `else` branch instead of past it. `if` without `else` is correct.
 - **Sibling local functions:** two local functions at the same nesting level share one scope record in the symbol table, so the second one gets wrong stack offsets.
+- **Local functions without parameters:** `def f():` is rejected with "identifier expected", because the parameter-list parser requires at least one name.
 - **Output files:** the output always goes to `intermediate code.int` and `final code.asm` in the current directory.
 - **Errors:** compilation stops at the first error. Some messages point to the next token, for example a missing `#}` is reported at the following `if`.
 

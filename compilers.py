@@ -1,5 +1,22 @@
+"""CutePy compiler.
+
+Compiles a program written in CutePy, a small educational Python-like
+language, into intermediate code (quads) and RISC-V assembly in one pass.
+
+Usage:
+    python compilers.py program.cpy
+
+Output, written to the current directory:
+    intermediate code.int   the quads, one per line
+    final code.asm          the RISC-V assembly
+
+Sections of this file: final code generation, intermediate code, symbol
+table, entry point, parser, lexer.
+"""
+
 import sys
 
+# Lexer state
 token = ''
 family = ''
 file_name = ''
@@ -8,22 +25,26 @@ position = 0
 legal_symbols = ['+', '-', '*', '/', '=', '<', '>', '!', '(', ')', '[', ']', '{', '}', '#', '$', ',', ';', ':', ' ',
                  '\t', '\n', '_', '"', '']
 keywords = ['def', 'not', 'and', 'or', 'if', 'else', 'while', 'return', 'print', 'int', 'input', 'declare']
+# Intermediate code
 quad_list = []
 quad_counter = 0
 temp_list = []
 temp_counter = 0
+# Symbol table (one Scope per nesting level) and final code
 depth = 0
 myScope = []
 parCounter = 0
+# Output files
 intCode = ''
 finCode = ''
 
 
 #####################################
-#          telikos kwdikas          #
+#   Final code generation (RISC-V)  #
 #####################################
 
 def gnvlcode(variable):
+    """Emit code that puts in t0 the address of a variable of an enclosing function, following access links."""
     entity, variableNestingLevel = myScope[depth].searchEntity(variable)
     currentLevel = myScope[-1].nestingLevel
     finCode.write('\tlw t0, -4(sp)\n')
@@ -33,6 +54,7 @@ def gnvlcode(variable):
 
 
 def loadvr(variable, register):
+    """Emit code that loads a constant or a variable into register t<register>."""
     if variable.isdigit():
         finCode.write('\tli t' + str(register) + ', ' + str(variable)+'\n')
     elif variable[0] == '+' or variable[0] == '-':
@@ -45,6 +67,8 @@ def loadvr(variable, register):
     else:
         current_level = myScope[-1].nestingLevel
         entity, variableNestingLevel = myScope[current_level].searchEntity(variable)
+        # Level 0 (the main function's variables) is addressed from s0, the current level
+        # from sp, and enclosing levels through the access links (gnvlcode).
         if int(variableNestingLevel) == 0:
             finCode.write('\tlw t' + str(register) + ', -' + str(entity.offset) + '(s0)\n')
         elif int(variableNestingLevel) == current_level:
@@ -58,6 +82,7 @@ def loadvr(variable, register):
 
 
 def storerv(register, variable):
+    """Emit code that stores register t<register> into a variable."""
     current_level = myScope[-1].nestingLevel
     entity, variableNestingLevel = myScope[current_level].searchEntity(variable)
     if int(variableNestingLevel) == 0:
@@ -73,15 +98,14 @@ def storerv(register, variable):
 
 
 def generate_final_code(quad):
+    """Emit the RISC-V code for one quad, under the label L<quad number>."""
     global parCounter
     operator = quad.getOperator()
     if operator == 'begin_block':
         finCode.write('L'+str(quad.getX())+':\n')
         finCode.write('\tsw ra, (sp)\n')
-    # elif operator == 'end_block':
-    #     finCode.write('L'+str(quad.getCounter())+':\n')
-    #     finCode.write('\tlw ra, (sp)\n')
-    #     finCode.write('\tjr ra\n')
+    # Note: no epilogue (lw ra, (sp) / jr ra) is generated for end_block, so functions
+    # don't return to their caller. See "Limitations" in the README.
     elif operator == 'halt':
         finCode.write('L' + str(quad.getCounter()) + ':\n')
         finCode.write('\tli a0, 10\n')
@@ -91,21 +115,16 @@ def generate_final_code(quad):
     if operator == 'inp':
         finCode.write('\tli a7, 5\n')
         finCode.write('\tecall\n')
-    # elif operator == 'out':
-    #     finCode.write('\tla a0, '+str(quad.getX())+'\n')
-    #     finCode.write('\tli a7, 1\n')
-    #     finCode.write('\tecall\n')
     elif operator == 'out':
         entity, _ =myScope[depth].searchEntity(quad.getX())
         finCode.write('\tlw a0, -'+str(entity.getOffset())+'(gp)\n')
         finCode.write('\tli a7, 1\n')
         finCode.write('\tecall\n')
-        # finCode.write('\tla a0, ' + str(quad.getX()) + '\n')
-        # finCode.write('\tli a7, 4\n')
-        # finCode.write('\tecall\n')
     elif operator == 'call':
         caller_level = myScope[depth].nestingLevel
         called_entity, called_level = myScope[caller_level].searchEntity(quad.getX())
+        # Access link of the new frame: a function at the caller's own level gets the
+        # caller's access link; a function nested in the caller gets the caller's frame.
         if caller_level == int(called_level):
             finCode.write('\tlw t0, -4(sp)\n')
             finCode.write('\tsw t0, -4(fp)\n')
@@ -122,6 +141,8 @@ def generate_final_code(quad):
         finCode.write('\tlw t0, -8(sp)\n')
         finCode.write('\tsw t1, (t0)\n')
     elif operator == 'par':
+        # Before the first parameter, point fp to the frame of the function being called
+        # (found by scanning ahead to the call quad). Parameters go to -12, -16, ... of that frame.
         if parCounter == 0:
             i = quad.getCounter()
             while True:
@@ -173,10 +194,11 @@ def generate_final_code(quad):
 
 
 #####################################
-#       endiamesos kwdikas          #
+#     Intermediate code (quads)     #
 #####################################
 
 class quad:
+    """One quad of intermediate code: its number, the operator and three operands."""
     def __init__(self, counter, op, x, y, z):
         self.counter = counter
         self.op = op
@@ -185,7 +207,7 @@ class quad:
         self.z = z
 
     def print_quad(self):
-        # return
+        """Write the quad as one line of the .int file."""
         intCode.write(str(self.counter) + " " + str(self.op) + " " + str(self.x) + " " + str(self.y) + " " + str(self.z)+'\n')
 
     def setz(self, z):
@@ -208,10 +230,12 @@ class quad:
 
 
 def next_quad():
+    """Return the number of the next quad to be generated, as a string."""
     return str(quad_counter)
 
 
 def gen_quad(op, x, y, z):
+    """Create a new quad and append it to quad_list."""
     global quad_list
     global quad_counter
     quad_list.append(quad(quad_counter, op, x, y, z))
@@ -219,6 +243,7 @@ def gen_quad(op, x, y, z):
 
 
 def newtemp():
+    """Create a temporary variable T_n in the current scope and return its name."""
     global temp_counter
     global depth
     global myScope
@@ -228,56 +253,66 @@ def newtemp():
 
 
 def makelist(x):
+    """Return a new list of quad numbers that contains only x."""
     new_list = []
     new_list.append(x)
     return new_list
 
 
 def merge(list1, list2):
+    """Return the two lists of quad numbers joined together."""
     return list1 + list2
 
 
 def backpatch(list, z):
+    """Set z as the jump target of every quad in the list."""
     if (len(list) == 0):
         return
     for x in range(len(list)):
         quad_list[int(list[x])].setz(z)
 
 
-#################################
-#       pinakas sumbolwn        #
-#################################
+#####################################
+#           Symbol table            #
+#####################################
 
 class Scope:
+    """One nesting level of the symbol table: its entities and the next free frame offset."""
     def __init__(self, nestingLevel):
         self.nestingLevel = nestingLevel
         self.entityList = []
+        # Stack frame layout: 0 = return address (ra), -4 = access link,
+        # -8 = address where the return value is stored; variables start at -12.
         self.offset = 12
 
     def getOffset(self):
         return self.offset
 
     def nextOffset(self):
+        """Reserve the next 4-byte slot of the stack frame and return its offset."""
         offset = self.offset
         self.offset += 4
         return offset
 
     def addEntity(self, entity):
+        """Add a variable, parameter, temporary or function to this scope."""
         self.entityList.append(entity)
 
     def printEntity(self):
-        # return
+        """Print the scope's entities (for debugging)."""
         print(self.nestingLevel, end='')
         for i in self.entityList:
             i.printEnt()
         print('')
 
     def setStartingQuad(self, fname, startingQuad):
+        """Record the number of the first quad of the function fname."""
         for i in self.entityList:
             if i.getName() == fname:
                 i.setStartingQuad(startingQuad)
 
     def searchEntity(self, name):
+        """Find name in this scope or an enclosing one and return (entity, nesting level); exit if it isn't declared."""
         for i in range(self.nestingLevel, -1, -1):
             for entity in myScope[i].entityList:
                 if entity.getName() == name:
@@ -286,6 +321,7 @@ class Scope:
 
 
 class Entity:
+    """Base class of all symbol table entries."""
     def __init__(self, name):
         self.name = name
 
@@ -294,6 +330,7 @@ class Entity:
 
 
 class Variable(Entity):
+    """A variable with its data type and its offset in the stack frame."""
     def __init__(self, name, datatype, offset):
         super().__init__(name)
         self.datatype = datatype
@@ -310,6 +347,7 @@ class Variable(Entity):
 
 
 class TemporaryVariable(Variable):
+    """A temporary variable created by newtemp()."""
     def __init__(self, name, datatype, offset):
         super().__init__(name, datatype, offset)
 
@@ -318,6 +356,7 @@ class TemporaryVariable(Variable):
 
 
 class Parameter(Variable):
+    """A formal parameter. id_list() also uses it for declared variables."""
     def __init__(self, name, datatype, offset):
         super().__init__(name, datatype, offset)
 
@@ -326,6 +365,7 @@ class Parameter(Variable):
 
 
 class Function(Entity):
+    """A local function: its first quad and the frame offset reserved for it in the enclosing scope."""
     def __init__(self, name, datatype):
         super().__init__(name)
         self.datatype = datatype
@@ -343,17 +383,22 @@ class Function(Entity):
         print(' ' + self.getName() + '/' + str(self.startingQuad) + '/' + str(self.getOffset()) + ' ', end='')
 
 
+#####################################
+#            Entry point            #
+#####################################
+
 def main():
+    """Check the command-line argument, open the source and output files, and compile."""
     global file_name
     global intCode
     global finCode
-    # elegxnos plh8ous orismatwn
+    # Exactly one argument: the source file
     if len(sys.argv) < 2:
         sys.exit("No file for compilation given.")
     elif len(sys.argv) > 2:
         sys.exit('More arguments or files than needed.')
     else:
-        # elegxos gia .cpy katalhksh
+        # The source file must end in .cpy
         if sys.argv[1][-1] == 'y' and sys.argv[1][-2] == 'p' and sys.argv[1][-3] == 'c' and sys.argv[1][-4] == '.':
             try:
                 file_name = open(sys.argv[1], "r")
@@ -371,23 +416,35 @@ def main():
             sys.exit('Not supported file type.')
 
 
+#####################################
+#              Parser               #
+#####################################
+# Recursive descent: one function per grammar rule. The parser also generates the
+# quads, fills the symbol table, and emits the final code of each function when its
+# block closes (syntax-directed translation, single pass).
+# To look ahead, a function saves the file position (tell) and current_line, calls
+# lex(), and seeks back if the token belongs to someone else.
+
 def syntax():
+    """Start the syntax analysis."""
     startRule()
 
 
 def startRule():
+    """startRule: def_main_part call_main_part"""
     def_main_part()
     call_main_part()
 
 
 def def_main_part():
+    """def_main_part: def_main_function+"""
     def_main_function()
     while peek():
         def_main_function()
 
 
-# elegxoume an meta thn oloklhrwsh ths main pame se EOF
 def peek() -> bool:
+    """Return True if another main function follows; the token is not consumed."""
     global file_name
     global current_line
     line = current_line
@@ -404,8 +461,8 @@ def peek() -> bool:
     return False
 
 
-# elegxoume an uparxei dhlwsh/eis sunarthshs
 def peek_fu() -> bool:
+    """Return True if a local function declaration follows; the token is not consumed."""
     global file_name
     global current_line
     line = current_line
@@ -421,6 +478,7 @@ def peek_fu() -> bool:
 
 
 def def_main_function():
+    """def_main_function: 'def' ID '(' ')' ':' '#{' declarations def_function* statements '#}'"""
     global file_name
     global current_line
     line = current_line
@@ -428,6 +486,7 @@ def def_main_function():
     global depth
     global myScope
     global parCounter
+    # Each main function starts with a new symbol table.
     myScope = []
     depth = 0
     myScope.append(Scope(depth))
@@ -462,11 +521,9 @@ def def_main_function():
                                 line = current_line
                                 lex()
                                 if token == '#}':
-                                    # for i in myScope:
-                                    #     i.printEntity()
+                                    # The block is complete, so its quads can be translated.
                                     for i in range(start, end):
                                         generate_final_code(quad_list[i])
-                                    # del myScope[-1]
                                     return
                                 else:
                                     current_line = line
@@ -495,6 +552,7 @@ def def_main_function():
 
 
 def def_function():
+    """def_function: 'def' ID '(' id_list ')' ':' '#{' declarations def_function* statements '#}'"""
     global file_name
     global current_line
     global depth
@@ -539,9 +597,10 @@ def def_function():
                                 if token == '#}':
                                     for i in range(start, end):
                                         generate_final_code(quad_list[i])
-                                    # to vgazoume se sxolia gia na fainontai ta scopes twn sunarthsewn prin diagrafoun
-                                    # sto teliko stadio 8a einai ektos sxoliwn gia th swsth leitourgia tou compiler
-                                    # del myScope[-1]
+                                    # Note: the finished function's scope should be removed here
+                                    # (del myScope[-1]). It was disabled while debugging to inspect
+                                    # the scopes, so sibling local functions share one scope record.
+                                    # See "Limitations" in the README.
                                     depth -= 1
                                     return
                                 else:
@@ -571,6 +630,7 @@ def def_function():
 
 
 def declarations():
+    """declarations: declaration_line*"""
     global file_name
     global current_line
     line = current_line
@@ -592,6 +652,7 @@ def declarations():
 
 
 def declaration_line():
+    """declaration_line: '#declare' id_list"""
     global file_name
     global current_line
     lex()
@@ -606,6 +667,7 @@ def declaration_line():
 
 
 def statements():
+    """statements: statement+"""
     global file_name
     global current_line
     statement()
@@ -625,6 +687,7 @@ def statements():
 
 
 def statement():
+    """statement: simple_statement | structured_statement"""
     global file_name
     global current_line
     line = current_line
@@ -643,6 +706,7 @@ def statement():
 
 
 def simple_statement():
+    """simple_statement: assignment_stat | print_stat | return_stat"""
     global file_name
     global current_line
     line = current_line
@@ -665,6 +729,7 @@ def simple_statement():
 
 
 def structured_statement():
+    """structured_statement: if_stat | while_stat"""
     global file_name
     global current_line
     line = current_line
@@ -683,6 +748,7 @@ def structured_statement():
 
 
 def assignment_stat():
+    """assignment_stat: ID '=' (expression ';' | 'int' '(' 'input' '(' ')' ')' ';')"""
     global file_name
     global current_line
     line = current_line
@@ -745,6 +811,7 @@ def assignment_stat():
 
 
 def print_stat():
+    """print_stat: 'print' '(' expression ')' ';'"""
     global file_name
     global current_line
     lex()
@@ -771,6 +838,7 @@ def print_stat():
 
 
 def return_stat():
+    """return_stat: 'return' '(' expression ')' ';'"""
     global file_name
     global current_line
     lex()
@@ -797,6 +865,7 @@ def return_stat():
 
 
 def if_stat():
+    """if_stat: 'if' '(' condition ')' ':' (statement | '#{' statements '#}') ['else' ':' (statement | '#{' statements '#}')]"""
     global file_name
     global current_line
     lex()
@@ -905,6 +974,7 @@ def if_stat():
 
 
 def while_stat():
+    """while_stat: 'while' '(' condition ')' ':' (statement | '#{' statements '#}')"""
     global file_name
     global current_line
     lex()
@@ -952,13 +1022,14 @@ def while_stat():
 
 
 def id_list():
+    """id_list: ID (',' ID)*   Adds each ID to the current scope."""
     global file_name
     global current_line
     global depth
     line = current_line
     lex()
     if family == 'identifier':
-        # new Entity -> entitylist.myscope
+        # Formal parameters and declared variables are both stored as Parameter entities.
         myScope[depth].addEntity(Parameter(token, 'Integer', myScope[depth].nextOffset()))
         line = current_line
         pos = file_name.tell()
@@ -975,6 +1046,7 @@ def id_list():
 
 
 def expression():
+    """expression: optional_sign term (ADD_OP term)*   Returns the name that holds the result."""
     global file_name
     global current_line
     op_s = optional_sign()
@@ -997,6 +1069,7 @@ def expression():
 
 
 def term():
+    """term: factor (MUL_OP factor)*   Returns the name that holds the result."""
     global file_name
     global current_line
     x = factor()
@@ -1018,6 +1091,7 @@ def term():
 
 
 def factor():
+    """factor: INTEGER | '(' expression ')' | ID idtail   Returns the name that holds the result."""
     global file_name
     global current_line
     lex()
@@ -1043,6 +1117,7 @@ def factor():
 
 
 def idtail() -> bool:
+    """idtail: '(' actual_par_list ')' | empty   Returns True if it was a function call."""
     global file_name
     global current_line
     line = current_line
@@ -1062,6 +1137,7 @@ def idtail() -> bool:
 
 
 def actual_par_list():
+    """actual_par_list: expression (',' expression)* | empty"""
     global file_name
     global current_line
     line = current_line
@@ -1090,6 +1166,7 @@ def actual_par_list():
 
 
 def optional_sign():
+    """optional_sign: ADD_OP | empty   Returns the sign, or ''."""
     global file_name
     global current_line
     line = current_line
@@ -1105,6 +1182,7 @@ def optional_sign():
 
 
 def condition():
+    """condition: bool_term ('or' bool_term)*   Returns the [true, false] lists of jumps to backpatch."""
     global file_name
     global current_line
     [Q1true, Q1false] = bool_term()
@@ -1114,6 +1192,7 @@ def condition():
     Btrue = Q1true
     Bfalse = Q1false
     while token == 'or':
+        # If the left side is false, evaluation continues with the next bool_term.
         backpatch(Bfalse, next_quad())
         line = current_line
         pos = file_name.tell()
@@ -1127,6 +1206,7 @@ def condition():
 
 
 def bool_term():
+    """bool_term: bool_factor ('and' bool_factor)*   Returns the [true, false] lists."""
     global file_name
     global current_line
     [R1true, R1false] = bool_factor()
@@ -1136,6 +1216,7 @@ def bool_term():
     pos = file_name.tell()
     lex()
     while token == 'and':
+        # If the left side is true, evaluation continues with the next bool_factor.
         backpatch(Qtrue, next_quad())
         [R2true, R2false] = bool_factor()
         Qfalse = merge(Qfalse, R2false)
@@ -1149,6 +1230,7 @@ def bool_term():
 
 
 def bool_factor():
+    """bool_factor: 'not' '[' condition ']' | '[' condition ']' | expression REL_OP expression"""
     global file_name
     global current_line
     line = current_line
@@ -1160,6 +1242,7 @@ def bool_factor():
             [Btrue, Bfalse] = condition()
             lex()
             if token == ']':
+                # not: swap the true and false lists
                 Rtrue = Bfalse
                 Rfalse = Btrue
             else:
@@ -1182,6 +1265,8 @@ def bool_factor():
         if family == 'relOperator':
             op = token
             y = expression()
+            # A conditional jump for "true" and a plain jump for "false". Their
+            # targets are unknown yet and are filled in later by backpatch().
             Rtrue = makelist(next_quad())
             gen_quad(op, x, y, '_')
             Rfalse = makelist(next_quad())
@@ -1192,6 +1277,7 @@ def bool_factor():
 
 
 def call_main_part():
+    """call_main_part: 'if' '__name__' '==' '"__main__"' ':' main_function_call+"""
     global file_name
     global current_line
     lex()
@@ -1233,6 +1319,7 @@ def call_main_part():
 
 
 def main_function_call():
+    """main_function_call: ID '(' ')' ';'"""
     global file_name
     global current_line
     lex()
@@ -1256,7 +1343,12 @@ def main_function_call():
         sys.exit('Identifier for main function call expected in line ' + str(current_line))
 
 
+#####################################
+#               Lexer               #
+#####################################
+
 def lex():
+    """Read the next token into the globals token and family (token is '' at end of file)."""
     global file_name
     global current_line
     global token
@@ -1267,19 +1359,19 @@ def lex():
     position = file_name.tell()
     char = file_name.read(1)
 
-    # elegxos gia adeio arxeio
+    # End of file (or empty file): return an empty token
     if char == '':
         print('Syntax and lex completed without errors.')
         return
 
-    # elegxos gia leukous xarakthres
+    # Skip whitespace, counting lines
     while char == ' ' or char == '\n' or char == '\t':
         if char == '\n':
             current_line += 1
         position = file_name.tell()
         char = file_name.read(1)
 
-    # elegxos gia pshfio
+    # Integer constant (must be followed by an operator, delimiter or whitespace)
     while char.isdigit():
         token += char
         position = file_name.tell()
@@ -1297,7 +1389,7 @@ def lex():
             family = 'number'
             return
 
-    # elegxos gia grammata kai alfarithmitika
+    # Identifier or keyword
     if char.isalpha():
         token = char
         position = file_name.tell()
@@ -1315,7 +1407,7 @@ def lex():
             family = 'keyword'
         return
 
-    # elegxos gia "aplous" operators
+    # Single-character operators
     if char == '+' or char == '-' or char == '*':
         token = char
         if token == '*':
@@ -1324,7 +1416,7 @@ def lex():
             family = 'addOperator'
         return
 
-    # elegxos gia operator diaireshs
+    # Integer division //
     if char == '/':
         token += char
         char = file_name.read(1)
@@ -1334,7 +1426,7 @@ def lex():
         family = 'mulOperator'
         return
 
-    # elegxos gia relational operators kai assignment
+    # Relational operators and assignment
     if char == '<':
         token += char
         position = file_name.tell()
@@ -1380,7 +1472,7 @@ def lex():
         family = 'assignment'
         return
 
-    # elegxos gia delimiters
+    # Delimiters
     if char == ';' or char == ',' or char == ':':
         token = char
         if token == ';':
@@ -1391,7 +1483,7 @@ def lex():
             family = 'colon'
         return
 
-    # elegxos gia groupSymbols kai sxolia
+    # Grouping symbols, #{ and #} blocks, and #$ ... #$ comments (skipped)
     if char == '[' or char == ']' or char == '(' or char == ')':
         token = char
         return
@@ -1421,7 +1513,7 @@ def lex():
     if not legal_character(char):
         sys.exit('Illegal character ' + char + ' in line: ' + str(current_line))
 
-    # elegxos gia __name__
+    # __name__ (used only in the call section)
     if char == '_':
         token += char
         char = file_name.read(1)
@@ -1461,7 +1553,7 @@ def lex():
         else:
             sys.exit('Illegal word starting with _ in line ' + str(current_line))
 
-    # elegxos gia "__main__"
+    # "__main__" (used only in the call section)
     if char == '"':
         token += char
         char = file_name.read(1)
@@ -1514,6 +1606,7 @@ def lex():
 
 
 def legal_character(character) -> bool:
+    """Return True if the character may appear in a CutePy program."""
     if character.isalnum() or character in legal_symbols:
         return True
     return False
